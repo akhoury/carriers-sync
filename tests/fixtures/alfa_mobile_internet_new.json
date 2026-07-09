@@ -1,0 +1,60 @@
+{
+  "ResponseCode": 8090,
+  "MobileNumberValue": "03333333",
+  "TypeValue": "Postpaid",
+  "SubTypeValue": "",
+  "CurrentBalanceValue": "$ 0.00",
+  "FreeUnitsValue": [
+    {
+      "DisplayName": "Free e-learning",
+      "SubDisplayName": "Data",
+      "UsageType": "data",
+      "TotalAmount": "20",
+      "TotalUnit": "GB",
+      "UsedAmount": "0.00",
+      "UsedUnit": "GB",
+      "ExtraUsage": "",
+      "ExtraUnit": "",
+      "ExtraUSD": "",
+      "ValidityDate": "20260616235959",
+      "ExpiryTime": "20260716235959",
+      "LinkedOfferName": "Teams Bundle",
+      "PrimaryNumber": null,
+      "Secondaries": null
+    },
+    {
+      "DisplayName": "Mobile Internet 7GB",
+      "SubDisplayName": "Data",
+      "UsageType": "data",
+      "TotalAmount": "10",
+      "TotalUnit": "GB",
+      "UsedAmount": "5.5",
+      "UsedUnit": "GB",
+      "ExtraUsage": "",
+      "ExtraUnit": "",
+      "ExtraUSD": "",
+      "ValidityDate": "20260615235959",
+      "ExpiryTime": "20260715235959",
+      "LinkedOfferName": "Mobile Internet 10GB",
+      "PrimaryNumber": null,
+      "Secondaries": null
+    },
+    {
+      "DisplayName": "Free Minutes",
+      "SubDisplayName": "Voice",
+      "UsageType": "voice",
+      "TotalAmount": "60",
+      "TotalUnit": "MIN",
+      "UsedAmount": "0",
+      "UsedUnit": "MIN",
+      "ExtraUsage": "",
+      "ExtraUnit": "",
+      "ExtraUSD": "",
+      "ValidityDate": "",
+      "ExpiryTime": "",
+      "LinkedOfferName": "BASE",
+      "PrimaryNumber": null,
+      "Secondaries": null
+    }
+  ]
+}

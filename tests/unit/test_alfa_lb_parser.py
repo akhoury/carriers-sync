@@ -26,39 +26,35 @@ def load(name):
     return json.loads((FIXTURES / name).read_text())
 
 
-def test_parse_ushare_yields_main_plus_secondaries():
-    payload = load("alfa_ushare_response.json")
+def test_parse_ushare_reports_aggregate_total():
+    """U-share accounts: Alfa's getconsumptionasync exposes a 'U-share Total
+    Bundle' aggregate (main + all secondaries) and a 'U-share Main' line, but
+    no per-secondary breakdown. We report a single aggregate main line so the
+    quota/usage sensors track the whole plan."""
+    payload = load("alfa_ushare_new.json")
     fetched_at = datetime(2026, 4, 28, 12, 0, tzinfo=UTC)
     result = parse_response(payload, account=make_account(), fetched_at=fetched_at)
 
     assert result.account_id == "03333333"
     assert result.fetched_at == fetched_at
-    assert len(result.lines) == 3
+    assert len(result.lines) == 1
 
     main = result.lines[0]
     assert main.line_id == "03333333"
     assert main.label == "John"
     assert main.is_secondary is False
-    assert main.consumed_gb == pytest.approx(2.0)
-    assert main.quota_gb == pytest.approx(20.0)
+    assert main.is_aggregate is True
+    # Aggregate total (14.20), NOT the main-only value (2.85).
+    assert main.consumed_gb == pytest.approx(14.20)
+    assert main.quota_gb == pytest.approx(25.0)
     assert main.extra_consumed_gb == 0.0
     assert main.parent_line_id is None
 
-    sec1 = result.lines[1]
-    assert sec1.line_id == "03222222"
-    assert sec1.label == "Wife"
-    assert sec1.is_secondary is True
-    assert sec1.consumed_gb == pytest.approx(1.0)
-    assert sec1.quota_gb is None
-    assert sec1.parent_line_id == "03333333"
 
-    sec2 = result.lines[2]
-    assert sec2.line_id == "03111111"
-    assert sec2.label == "Alarm eSIM"
-
-
-def test_parse_mobile_internet_no_secondaries():
-    payload = load("alfa_mobile_internet.json")
+def test_parse_mobile_internet_suffixed_name():
+    """Standalone data lines can be named 'Mobile Internet 7GB' etc. — match
+    by prefix, not exact string. Not a U-share plan, so not an aggregate."""
+    payload = load("alfa_mobile_internet_new.json")
     result = parse_response(
         payload,
         account=make_account(secondary_labels={}),
@@ -69,33 +65,22 @@ def test_parse_mobile_internet_no_secondaries():
     assert main.consumed_gb == pytest.approx(5.5)
     assert main.quota_gb == pytest.approx(10.0)
     assert main.is_secondary is False
-
-
-def test_secondary_without_label_falls_back_to_phone_number():
-    payload = load("alfa_ushare_response.json")
-    result = parse_response(
-        payload,
-        account=make_account(secondary_labels={"03222222": "Wife"}),
-        fetched_at=datetime.now(UTC),
-    )
-    sec_unlabelled = next(line for line in result.lines if line.line_id == "03111111")
-    assert sec_unlabelled.label == "03111111"
+    assert main.is_aggregate is False
 
 
 def test_extra_consumption_passed_through():
     payload = {
-        "ServiceInformationValue": [
+        "FreeUnitsValue": [
             {
-                "ServiceNameValue": "Mobile Internet",
-                "ServiceDetailsInformationValue": [
-                    {
-                        "ConsumptionValue": "9",
-                        "ConsumptionUnitValue": "GB",
-                        "ExtraConsumptionValue": "1.5",
-                        "PackageValue": "10",
-                        "PackageUnitValue": "GB",
-                    }
-                ],
+                "DisplayName": "Mobile Internet",
+                "SubDisplayName": "Data",
+                "UsageType": "data",
+                "UsedAmount": "9",
+                "UsedUnit": "GB",
+                "ExtraUsage": "1.5",
+                "ExtraUnit": "GB",
+                "TotalAmount": "10",
+                "TotalUnit": "GB",
             }
         ]
     }
@@ -107,8 +92,33 @@ def test_extra_consumption_passed_through():
     assert result.lines[0].extra_consumed_gb == pytest.approx(1.5)
 
 
-def test_missing_service_information_raises_unknown():
-    with pytest.raises(UnknownFetchError):
+def test_mb_units_converted():
+    payload = {
+        "FreeUnitsValue": [
+            {
+                "DisplayName": "Mobile Internet",
+                "SubDisplayName": "Data",
+                "UsageType": "data",
+                "UsedAmount": "512",
+                "UsedUnit": "MB",
+                "ExtraUsage": "",
+                "ExtraUnit": "",
+                "TotalAmount": "1",
+                "TotalUnit": "GB",
+            }
+        ]
+    }
+    result = parse_response(
+        payload,
+        account=make_account(secondary_labels={}),
+        fetched_at=datetime.now(UTC),
+    )
+    assert result.lines[0].consumed_gb == pytest.approx(0.5, abs=0.001)
+    assert result.lines[0].quota_gb == pytest.approx(1.0)
+
+
+def test_missing_free_units_raises_unknown():
+    with pytest.raises(UnknownFetchError, match="FreeUnitsValue"):
         parse_response(
             {},
             account=make_account(secondary_labels={}),
@@ -116,15 +126,32 @@ def test_missing_service_information_raises_unknown():
         )
 
 
-def test_no_supported_service_raises_no_consumption_data_error():
-    """Alarm SIMs / voice-only lines often have no Mobile Internet entry in
-    getconsumption. We raise a specific subclass so the fetcher can fall
-    back to getmyservices."""
+def test_empty_free_units_raises_unknown():
+    with pytest.raises(UnknownFetchError, match="FreeUnitsValue"):
+        parse_response(
+            {"FreeUnitsValue": []},
+            account=make_account(secondary_labels={}),
+            fetched_at=datetime.now(UTC),
+        )
+
+
+def test_voice_only_raises_no_consumption_data_error():
+    """Voice-only / alarm SIMs have no data bundle in getconsumptionasync.
+    We raise NoConsumptionDataError so the fetcher can fall back to
+    getmyservices for the assigned bundle."""
     from carriers_sync.providers.base import NoConsumptionDataError
 
     payload = {
-        "ServiceInformationValue": [
-            {"ServiceNameValue": "Voice", "ServiceDetailsInformationValue": []}
+        "FreeUnitsValue": [
+            {
+                "DisplayName": "Free Minutes",
+                "SubDisplayName": "Voice",
+                "UsageType": "voice",
+                "UsedAmount": "0",
+                "UsedUnit": "MIN",
+                "TotalAmount": "60",
+                "TotalUnit": "MIN",
+            }
         ]
     }
     with pytest.raises(NoConsumptionDataError, match="no supported service"):

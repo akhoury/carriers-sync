@@ -63,20 +63,22 @@ def make_browser(*, page_text="ok", xhr_json=None, raise_on_wait=None):
 
 async def test_happy_path_returns_provider_result():
     xhr = {
-        "ServiceInformationValue": [
+        "ResponseCode": 8090,
+        "MobileNumberValue": "03333333",
+        "CurrentBalanceValue": "$ 0.00",
+        "FreeUnitsValue": [
             {
-                "ServiceNameValue": "Mobile Internet",
-                "ServiceDetailsInformationValue": [
-                    {
-                        "ConsumptionValue": "1",
-                        "ConsumptionUnitValue": "GB",
-                        "ExtraConsumptionValue": "0",
-                        "PackageValue": "20",
-                        "PackageUnitValue": "GB",
-                    }
-                ],
+                "DisplayName": "Mobile Internet",
+                "SubDisplayName": "Data",
+                "UsageType": "data",
+                "UsedAmount": "1",
+                "UsedUnit": "GB",
+                "ExtraUsage": "",
+                "ExtraUnit": "",
+                "TotalAmount": "20",
+                "TotalUnit": "GB",
             }
-        ]
+        ],
     }
     browser = make_browser(xhr_json=xhr)
     result = await AlfaLbProvider().fetch(make_account(), browser)
@@ -98,7 +100,7 @@ async def test_xhr_timeout_raises_transient():
 
 
 async def test_missing_service_raises_unknown_then_classifier_keeps_unknown():
-    browser = make_browser(xhr_json={"ServiceInformationValue": []})
+    browser = make_browser(xhr_json={"FreeUnitsValue": []})
     with pytest.raises(UnknownFetchError):
         await AlfaLbProvider().fetch(make_account(), browser)
 

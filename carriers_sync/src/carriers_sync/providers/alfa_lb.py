@@ -26,7 +26,12 @@ from carriers_sync.providers.base import (
 
 logger = logging.getLogger("carriers_sync.providers.alfa_lb")
 
-_SUPPORTED_SERVICES = {"U-share Main", "Mobile Internet"}
+# getconsumptionasync entries are matched by DisplayName. A U-share plan
+# exposes an aggregate line (main + all secondaries rolled up) and a main-only
+# line; standalone plans expose a "Mobile Internet[ <size>]" line.
+_USHARE_TOTAL = "U-share Total Bundle"
+_USHARE_MAIN = "U-share Main"
+_MOBILE_INTERNET_PREFIX = "Mobile Internet"
 _LOGIN_URL = "https://www.alfa.com.lb/en/account/login"
 _CONSUMPTION_URL_PATTERN = "**/en/account/getconsumption*"
 _GETMYSERVICES_URL = "https://www.alfa.com.lb/en/account/manage-services/getmyservices"
@@ -45,85 +50,110 @@ def parse_response(
     account: AccountConfig,
     fetched_at: datetime,
 ) -> ProviderResult:
-    """Convert Alfa's getconsumption JSON into a ProviderResult.
+    """Convert Alfa's getconsumptionasync JSON into a ProviderResult.
 
-    Raises UnknownFetchError on any shape mismatch.
+    Alfa's response lists every free unit (data + voice bundles) under
+    ``FreeUnitsValue``. For a U-share plan it exposes a "U-share Total Bundle"
+    aggregate — main line plus every secondary rolled up — and a "U-share Main"
+    line; the per-secondary breakdown is no longer provided (``Secondaries`` is
+    always null). We therefore report a single line: the aggregate when it
+    exists (``is_aggregate=True``), otherwise the standalone data bundle.
+
+    Raises UnknownFetchError on any shape mismatch, NoConsumptionDataError when
+    there is no data bundle at all (voice-only / alarm SIMs).
     """
-    services = payload.get("ServiceInformationValue")
-    if not isinstance(services, list) or not services:
-        raise UnknownFetchError("missing or empty ServiceInformationValue")
+    free_units = payload.get("FreeUnitsValue")
+    if not isinstance(free_units, list) or not free_units:
+        raise UnknownFetchError("missing or empty FreeUnitsValue")
 
-    siv = next(
-        (s for s in services if s.get("ServiceNameValue") in _SUPPORTED_SERVICES),
-        None,
-    )
-    if siv is None:
+    entry, is_aggregate = _select_data_entry(free_units)
+    if entry is None:
         # Some accounts (alarm SIMs, low-use lines) have a bundle assigned
         # but the consumption endpoint doesn't expose it. The fetcher
         # should fall back to /account/manage-services/getmyservices which
         # always lists the active bundle.
         raise NoConsumptionDataError(
-            f"no supported service in getconsumption response (have: "
-            f"{[s.get('ServiceNameValue') for s in services]})"
+            f"no supported service in getconsumptionasync response (have: "
+            f"{[e.get('DisplayName') for e in free_units]})"
         )
 
-    details_list = siv.get("ServiceDetailsInformationValue")
-    if not isinstance(details_list, list) or not details_list:
-        raise UnknownFetchError("missing ServiceDetailsInformationValue")
-    details = details_list[0]
-
-    main_consumed_gb = _to_gb(
-        _require_num(details, "ConsumptionValue"),
-        details.get("ConsumptionUnitValue", "GB"),
-    )
-    main_quota_gb = _to_gb(
-        _require_num(details, "PackageValue"),
-        details.get("PackageUnitValue", "GB"),
-    )
-    main_extra_gb = _to_gb(
-        _require_num(details, "ExtraConsumptionValue"),
-        details.get("ConsumptionUnitValue", "GB"),
-    )
+    consumed_gb = _to_gb(_require_num(entry, "UsedAmount"), _unit(entry, "UsedUnit"))
+    quota_gb = _to_gb(_require_num(entry, "TotalAmount"), _unit(entry, "TotalUnit"))
+    extra_gb = _extra_gb(entry)
 
     main_line = LineUsage(
         line_id=account.username,
         label=account.label or account.username,
-        consumed_gb=main_consumed_gb,
-        quota_gb=main_quota_gb,
-        extra_consumed_gb=main_extra_gb,
+        consumed_gb=consumed_gb,
+        quota_gb=quota_gb,
+        extra_consumed_gb=extra_gb,
         is_secondary=False,
         parent_line_id=None,
+        is_aggregate=is_aggregate,
     )
-
-    lines: list[LineUsage] = [main_line]
-
-    for sv in details.get("SecondaryValue") or []:
-        if sv.get("BundleNameValue") != "Twin-Data Secondary":
-            continue
-        number = sv.get("SecondaryNumberValue")
-        if not isinstance(number, str):
-            raise UnknownFetchError("secondary missing SecondaryNumberValue")
-        consumed = _to_gb(
-            _require_num(sv, "ConsumptionValue"),
-            sv.get("ConsumptionUnitValue", "GB"),
-        )
-        lines.append(
-            LineUsage(
-                line_id=number,
-                label=account.secondary_labels.get(number, number),
-                consumed_gb=consumed,
-                quota_gb=None,
-                extra_consumed_gb=0.0,
-                is_secondary=True,
-                parent_line_id=account.username,
-            )
-        )
 
     return ProviderResult(
         account_id=account.username,
-        lines=lines,
+        lines=[main_line],
         fetched_at=fetched_at,
     )
+
+
+def _select_data_entry(
+    free_units: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, bool]:
+    """Pick the FreeUnitsValue entry to report and whether it's an aggregate.
+
+    Priority: U-share aggregate > U-share main > standalone Mobile Internet.
+    Returns (None, False) when there is no data bundle to report.
+    """
+    by_name: dict[str, dict[str, Any]] = {}
+    for e in free_units:
+        name = e.get("DisplayName")
+        if isinstance(name, str):
+            by_name.setdefault(name, e)
+
+    if _USHARE_TOTAL in by_name:
+        return by_name[_USHARE_TOTAL], True
+    if _USHARE_MAIN in by_name:
+        return by_name[_USHARE_MAIN], False
+    for e in free_units:
+        name = e.get("DisplayName")
+        if (
+            isinstance(name, str)
+            and name.startswith(_MOBILE_INTERNET_PREFIX)
+            and e.get("UsageType") == "data"
+        ):
+            return e, False
+    return None, False
+
+
+def _unit(entry: dict[str, Any], key: str) -> str:
+    u = entry.get(key)
+    if not isinstance(u, str) or not u.strip():
+        return "GB"
+    return u.strip()
+
+
+def _extra_gb(entry: dict[str, Any]) -> float:
+    """Extra (over-quota) consumption in GB, or 0.0 when none/blank."""
+    raw = entry.get("ExtraUsage")
+    val = _optional_float(raw)
+    if val is None or val <= 0:
+        return 0.0
+    unit = entry.get("ExtraUnit")
+    if not isinstance(unit, str) or not unit.strip():
+        unit = _unit(entry, "UsedUnit")
+    return _to_gb(val, unit.strip())
+
+
+def _optional_float(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 _BUNDLE_TEXT_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)\s*$", re.IGNORECASE)
