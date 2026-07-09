@@ -126,6 +126,20 @@ class TouchLbProvider:
                 raise TransientFetchError(f"goto home failed: {e}") from e
             await self._guard_rejected(await page.content())
 
+            # Touch retired its username/password portal in mid-2026: the
+            # /autoforms/* URLs now redirect to an OTP-only site
+            # (touch.com.lb/en) where login requires a mobile/email
+            # verification code — impossible for an unattended poller. Detect
+            # the redirect off /autoforms and fail with an actionable message
+            # rather than the generic "no logout link" from the dead POST.
+            if "/autoforms" not in page.url:
+                raise AuthFetchError(
+                    "Touch retired its password portal; login is now OTP-only "
+                    "(mobile/email verification code), so automated sync is no "
+                    "longer possible. Remove this Touch account until Touch "
+                    "exposes an API or app password."
+                )
+
             # Login.
             try:
                 login_resp = await context.request.post(
