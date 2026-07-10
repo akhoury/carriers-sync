@@ -27,3 +27,4 @@ node_modules
 /data/
 dev/data/
 dev/dashboard-example.yaml
+docs/samples
