@@ -1,9 +1,14 @@
 # Carriers Sync — Documentation
 
 Sync mobile-carrier data usage to Home Assistant as proper devices and
-sensors via MQTT discovery. Currently supports **Alfa** and **Touch** in
-Lebanon; the architecture is country-agnostic so other providers can be
-added as drop-in adapters.
+sensors via MQTT discovery. Currently supports **Alfa** and **Ogero** in
+Lebanon (~~**Touch**~~ temporarily unavailable — see note); the architecture
+is country-agnostic so other providers can be added as drop-in adapters.
+
+> **Note:** ~~Touch~~ moved to **OTP-only login** (SMS/email verification
+> code), which disables automated sync for now. Touch support is temporarily
+> unavailable until we add OTP verification — logging in, prompting the user
+> for the OTP, and keeping that session alive.
 
 ## Prerequisites
 

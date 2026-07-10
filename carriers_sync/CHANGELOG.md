@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] — 2026-07-10
+
+### Fixed
+
+- **Alfa: every account broke with "missing or empty
+  ServiceInformationValue".** Alfa migrated its consumption endpoint (now
+  `getconsumptionasync`) off the old `ServiceInformationValue` schema.
+  Rewrote `parse_response` for the new `FreeUnitsValue` shape
+  (`UsedAmount`/`UsedUnit`, `TotalAmount`/`TotalUnit`, `ExtraUsage`).
+  Verified live against all configured Alfa accounts.
+
+### Changed
+
+- **Alfa U-share is now reported as a single aggregate line.** Alfa no
+  longer exposes per-secondary usage (`Secondaries` is always null); it
+  provides a "U-share Total Bundle" aggregate (main + all secondaries) plus
+  a "U-share Main" line. We report the aggregate against the shared quota, so
+  the account's usage/quota sensors stay correct. The per-secondary HA
+  devices no longer update, because Alfa stopped sending that data.
+- **Touch temporarily unavailable — moved to OTP-only login.** Touch retired
+  its username/password portal; `www.touch.com.lb/autoforms/*` now redirects
+  to an OTP-only site (mobile/email verification code). The provider detects
+  this and fails with a clear, actionable message instead of the cryptic
+  "login did not produce a logged-in page (no logout link)". Automated sync
+  will return once OTP verification is implemented (log in, prompt the user
+  for the OTP, keep the session alive).
+
+### Docs
+
+- README, DOCS, and the App description now strike through Touch and note
+  the OTP migration. DOCS also lists Ogero (previously omitted).
+
 ## [0.4.4] — 2026-04-30
 
 ### Fixed
@@ -218,6 +250,7 @@ After updating, expect to:
 - `last_synced` / `last_attempted` / `last_error` / `sync_ok` sensors
   for staleness visibility.
 
+[0.4.5]: https://github.com/akhoury/carriers-sync/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/akhoury/carriers-sync/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/akhoury/carriers-sync/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/akhoury/carriers-sync/compare/v0.4.1...v0.4.2
