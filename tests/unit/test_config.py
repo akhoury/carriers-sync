@@ -42,7 +42,7 @@ def test_load_minimal_valid_config(tmp_path):
     assert acct.secondary_labels == {}
 
 
-def test_secondary_labels_list_to_dict_conversion(tmp_path):
+def test_secondary_labels_strings_to_dict_conversion(tmp_path):
     path = write_options(
         tmp_path,
         {
@@ -56,8 +56,8 @@ def test_secondary_labels_list_to_dict_conversion(tmp_path):
                     "password": "p",
                     "label": "John",
                     "secondary_labels": [
-                        {"number": "03222222", "label": "Wife"},
-                        {"number": "03111111", "label": "Alarm eSIM"},
+                        "03222222:Wife",
+                        "03111111: Alarm eSIM",
                     ],
                 }
             ],
@@ -66,8 +66,77 @@ def test_secondary_labels_list_to_dict_conversion(tmp_path):
     cfg = load_config(path)
     assert cfg.accounts[0].secondary_labels == {
         "03222222": "Wife",
-        "03111111": "Alarm eSIM",
+        "03111111": "Alarm eSIM",  # surrounding whitespace trimmed
     }
+
+
+def test_secondary_labels_label_may_contain_colon(tmp_path):
+    path = write_options(
+        tmp_path,
+        {
+            "poll_interval_minutes": 60,
+            "danger_percent": 80,
+            "log_level": "info",
+            "accounts": [
+                {
+                    "provider": "alfa-lb",
+                    "username": "03333333",
+                    "password": "p",
+                    "label": "John",
+                    "secondary_labels": ["03222222:Home: kitchen"],
+                }
+            ],
+        },
+    )
+    cfg = load_config(path)
+    # Split on the FIRST colon only.
+    assert cfg.accounts[0].secondary_labels == {"03222222": "Home: kitchen"}
+
+
+def test_secondary_labels_missing_colon_raises(tmp_path):
+    path = write_options(
+        tmp_path,
+        {
+            "poll_interval_minutes": 60,
+            "danger_percent": 80,
+            "log_level": "info",
+            "accounts": [
+                {
+                    "provider": "alfa-lb",
+                    "username": "03333333",
+                    "password": "p",
+                    "label": "John",
+                    "secondary_labels": ["03222222 Wife"],
+                }
+            ],
+        },
+    )
+    with pytest.raises(ConfigError, match="number:label"):
+        load_config(path)
+
+
+def test_secondary_labels_old_dict_format_rejected(tmp_path):
+    """The pre-0.5.0 dict format must fail with a clear message pointing at
+    the new string format."""
+    path = write_options(
+        tmp_path,
+        {
+            "poll_interval_minutes": 60,
+            "danger_percent": 80,
+            "log_level": "info",
+            "accounts": [
+                {
+                    "provider": "alfa-lb",
+                    "username": "03333333",
+                    "password": "p",
+                    "label": "John",
+                    "secondary_labels": [{"number": "03222222", "label": "Wife"}],
+                }
+            ],
+        },
+    )
+    with pytest.raises(ConfigError, match="number:label"):
+        load_config(path)
 
 
 def test_duplicate_usernames_dedup_first_wins(tmp_path):

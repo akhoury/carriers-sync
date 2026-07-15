@@ -32,7 +32,7 @@ is country-agnostic so other providers can be added as drop-in adapters.
 | `username` | str | Carrier portal username. Alfa: the phone number (`03333333`). Touch: the portal account login. Ogero: typically the email address you registered with. |
 | `password` | str | Portal password (stored in `/data/options.json`). |
 | `label` | str | Friendly name shown in Home Assistant. |
-| `secondary_labels` | list | Per-line labels keyed by phone number: `[{number: 03222222, label: Wife}, ...]`. Alfa: names U-share twin lines under the main number. Touch / Ogero: names individual numbers under one account. |
+| `secondary_labels` | list | Optional. Per-line labels as `"number:label"` strings, e.g. `["03222222:Wife", "03111111:Alarm eSIM"]` (split on the first colon). Omit it, or use `[]`, for accounts with no secondaries. Names U-share twin lines (Alfa) or individual numbers (Ogero) under the main account. |
 
 ### Provider differences
 

@@ -94,12 +94,24 @@ def _parse_account(item: dict[str, Any], *, index: int) -> AccountConfig:
     if not isinstance(raw_secondaries, list):
         raise ConfigError(f"accounts[{index}].secondary_labels must be a list")
 
+    # Each entry is a "number:label" string (e.g. "70301234:Wife"). This flat
+    # format lets Home Assistant mark the whole list optional; a nested
+    # list-of-dicts (the pre-0.5.0 format) cannot be omitted in the App schema.
     secondary_labels: dict[str, str] = {}
     for j, entry in enumerate(raw_secondaries):
-        if not isinstance(entry, dict):
-            raise ConfigError(f"accounts[{index}].secondary_labels[{j}] must be an object")
-        number = _require(entry, "number", str, ctx=f"accounts[{index}].secondary_labels[{j}]")
-        slabel = _require(entry, "label", str, ctx=f"accounts[{index}].secondary_labels[{j}]")
+        ctx = f"accounts[{index}].secondary_labels[{j}]"
+        if not isinstance(entry, str):
+            raise ConfigError(
+                f"{ctx} must be a 'number:label' string (e.g. '70301234:Wife'); "
+                f"the pre-0.5.0 {{number, label}} object format is no longer supported"
+            )
+        number, sep, slabel = entry.partition(":")
+        number = number.strip()
+        slabel = slabel.strip()
+        if not sep or not number or not slabel:
+            raise ConfigError(f"{ctx} must be 'number:label' (e.g. '70301234:Wife'), got {entry!r}")
+        if not number.isdigit():
+            raise ConfigError(f"{ctx} number part must be digits, got {number!r}")
         secondary_labels[number] = slabel
 
     return AccountConfig(

@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-07-10
+
+### Changed (breaking)
+
+- **`secondary_labels` is now a flat list of `"number:label"` strings**
+  instead of a list of `{number, label}` objects. This is the only shape
+  Home Assistant can mark optional, so an account with no secondaries can now
+  omit the field entirely (no more `secondary_labels: []` or "Missing option"
+  errors when adding an account through the UI).
+
+  Migration — rewrite each entry, splitting on the first colon:
+
+  ```yaml
+  # before (<= 0.4.x)
+  secondary_labels:
+    - number: "70301234"
+      label: Wife
+  # after (0.5.0+)
+  secondary_labels:
+    - "70301234:Wife"
+  ```
+
+  The old object format is rejected with a clear error pointing here.
+
+### Fixed
+
+- **App failed to start on 0.4.6: "Missing option 'secondary_labels?' in
+  accounts".** 0.4.6 tried to make the field optional by appending `?` to the
+  schema *key*, which is invalid — Supervisor treated `secondary_labels?` as a
+  literal required option name. The new flat-list schema (`- str?`) is the
+  correct, supported way to make the list optional.
+
 ## [0.4.6] — 2026-07-10
 
 ### Added
@@ -20,9 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **`secondary_labels` is now optional** in the App config schema. Adding an
-  account without secondaries through the Home Assistant UI no longer fails
-  with "Missing option 'secondary_labels' in accounts".
 - **Unsupported providers now reset their sensors.** When a provider can no
   longer be automated (Touch, after the OTP-only migration), the account's
   values are reset to zero, its secondary lines are zeroed, and it is dropped
@@ -275,6 +304,7 @@ After updating, expect to:
 - `last_synced` / `last_attempted` / `last_error` / `sync_ok` sensors
   for staleness visibility.
 
+[0.5.0]: https://github.com/akhoury/carriers-sync/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/akhoury/carriers-sync/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/akhoury/carriers-sync/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/akhoury/carriers-sync/compare/v0.4.3...v0.4.4
