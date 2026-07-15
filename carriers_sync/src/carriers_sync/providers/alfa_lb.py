@@ -28,10 +28,12 @@ logger = logging.getLogger("carriers_sync.providers.alfa_lb")
 
 # getconsumptionasync entries are matched by DisplayName. A U-share plan
 # exposes an aggregate line (main + all secondaries rolled up) and a main-only
-# line; standalone plans expose a "Mobile Internet[ <size>]" line.
+# line; single-bundle plans expose one data entry named after the plan
+# ("Mobile Internet 7GB", "Alfanet 800GB", ...). Free add-ons are named
+# "Free <something>" and must never be picked as the primary line.
 _USHARE_TOTAL = "U-share Total Bundle"
 _USHARE_MAIN = "U-share Main"
-_MOBILE_INTERNET_PREFIX = "Mobile Internet"
+_FREE_ADDON_PREFIX = "free"
 _LOGIN_URL = "https://www.alfa.com.lb/en/account/login"
 _CONSUMPTION_URL_PATTERN = "**/en/account/getconsumption*"
 _GETMYSERVICES_URL = "https://www.alfa.com.lb/en/account/manage-services/getmyservices"
@@ -104,8 +106,10 @@ def _select_data_entry(
 ) -> tuple[dict[str, Any] | None, bool]:
     """Pick the FreeUnitsValue entry to report and whether it's an aggregate.
 
-    Priority: U-share aggregate > U-share main > standalone Mobile Internet.
-    Returns (None, False) when there is no data bundle to report.
+    Priority: U-share aggregate > U-share main > first non-"Free" data bundle
+    (Mobile Internet, Alfanet, or any future plan — matched generically, never
+    by the size in the plan name). Returns (None, False) when there is no data
+    bundle to report.
     """
     by_name: dict[str, dict[str, Any]] = {}
     for e in free_units:
@@ -117,12 +121,15 @@ def _select_data_entry(
         return by_name[_USHARE_TOTAL], True
     if _USHARE_MAIN in by_name:
         return by_name[_USHARE_MAIN], False
+    # Single-bundle accounts (Mobile Internet, Alfanet, ...): the primary data
+    # bundle is the first data entry that isn't a free add-on ("Free
+    # e-learning", "Free Minutes", ...).
     for e in free_units:
         name = e.get("DisplayName")
         if (
             isinstance(name, str)
-            and name.startswith(_MOBILE_INTERNET_PREFIX)
             and e.get("UsageType") == "data"
+            and not name.strip().lower().startswith(_FREE_ADDON_PREFIX)
         ):
             return e, False
     return None, False
@@ -253,10 +260,18 @@ def _require_num(d: dict[str, Any], key: str) -> float:
 
 
 def _to_gb(value: float, unit: str) -> float:
-    if unit == "MB":
+    # Normalise case/whitespace so plan changes that report a different unit
+    # (or a lowercase one) still parse. Quota/usage never come from the plan
+    # name — only from these fields — so any plan size is handled.
+    u = unit.strip().upper()
+    if u == "KB":
+        return round(value / (1024 * 1024), 3)
+    if u == "MB":
         return round(value / 1024, 3)
-    if unit == "GB":
+    if u == "GB":
         return round(value, 3)
+    if u == "TB":
+        return round(value * 1024, 3)
     raise UnknownFetchError(f"unknown unit: {unit}")
 
 

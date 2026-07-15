@@ -1,0 +1,26 @@
+{
+  "ResponseCode": 8090,
+  "MobileNumberValue": "70000000",
+  "TypeValue": "Postpaid",
+  "SubTypeValue": "Alfa Net Postpaid",
+  "CurrentBalanceValue": "$ 0.00",
+  "FreeUnitsValue": [
+    {
+      "DisplayName": "Alfanet 800GB",
+      "SubDisplayName": "Data",
+      "UsageType": "data",
+      "TotalAmount": "53.33",
+      "TotalUnit": "GB",
+      "UsedAmount": "10.51",
+      "UsedUnit": "GB",
+      "ExtraUsage": "",
+      "ExtraUnit": "",
+      "ExtraUSD": "",
+      "ValidityDate": "20260714124124",
+      "ExpiryTime": "20260715235959",
+      "LinkedOfferName": "Postpaid Alfanet 800GB",
+      "PrimaryNumber": null,
+      "Secondaries": null
+    }
+  ]
+}

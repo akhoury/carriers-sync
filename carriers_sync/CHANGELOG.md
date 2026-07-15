@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.6] — 2026-07-10
+
+### Added
+
+- **Alfa AlfaNet plans.** AlfaNet postpaid lines expose a single data bundle
+  named after the plan (e.g. "Alfanet 800GB"). The parser now selects the
+  primary data bundle generically — the first non-"Free" data entry — instead
+  of matching only U-share / Mobile Internet, so AlfaNet (and future plan
+  names) work. Verified live. Plan size/unit are always read from
+  `TotalAmount`/`UsedAmount` (never parsed from the name), and unit handling
+  now covers KB/MB/GB/TB case-insensitively, so upgrading/downgrading to any
+  plan size is reported correctly.
+
+### Changed
+
+- **`secondary_labels` is now optional** in the App config schema. Adding an
+  account without secondaries through the Home Assistant UI no longer fails
+  with "Missing option 'secondary_labels' in accounts".
+- **Unsupported providers now reset their sensors.** When a provider can no
+  longer be automated (Touch, after the OTP-only migration), the account's
+  values are reset to zero, its secondary lines are zeroed, and it is dropped
+  from persisted state — instead of freezing the last-known numbers in Home
+  Assistant. Backed by a new `ProviderUnsupportedError` (a no-retry auth
+  error that also triggers the reset).
+
 ## [0.4.5] — 2026-07-10
 
 ### Fixed
@@ -250,6 +275,7 @@ After updating, expect to:
 - `last_synced` / `last_attempted` / `last_error` / `sync_ok` sensors
   for staleness visibility.
 
+[0.4.6]: https://github.com/akhoury/carriers-sync/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/akhoury/carriers-sync/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/akhoury/carriers-sync/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/akhoury/carriers-sync/compare/v0.4.2...v0.4.3

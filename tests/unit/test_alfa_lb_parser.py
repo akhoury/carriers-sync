@@ -51,6 +51,57 @@ def test_parse_ushare_reports_aggregate_total():
     assert main.parent_line_id is None
 
 
+def test_parse_alfanet_single_bundle():
+    """AlfaNet postpaid lines expose a single non-U-share data bundle named
+    after the plan (e.g. 'Alfanet 800GB'). Report it as a plain main line."""
+    payload = load("alfa_alfanet_new.json")
+    result = parse_response(
+        payload,
+        account=make_account(secondary_labels={}),
+        fetched_at=datetime.now(UTC),
+    )
+    assert len(result.lines) == 1
+    main = result.lines[0]
+    assert main.consumed_gb == pytest.approx(10.51)
+    assert main.quota_gb == pytest.approx(53.33)
+    assert main.is_secondary is False
+    assert main.is_aggregate is False
+
+
+def test_free_addons_not_picked_as_main_line():
+    """Free add-ons ('Free e-learning') must never be chosen as the data
+    line when a real bundle is present."""
+    payload = {
+        "FreeUnitsValue": [
+            {
+                "DisplayName": "Free e-learning",
+                "SubDisplayName": "Data",
+                "UsageType": "data",
+                "UsedAmount": "0",
+                "UsedUnit": "GB",
+                "TotalAmount": "20",
+                "TotalUnit": "GB",
+            },
+            {
+                "DisplayName": "Alfanet 800GB",
+                "SubDisplayName": "Data",
+                "UsageType": "data",
+                "UsedAmount": "3",
+                "UsedUnit": "GB",
+                "TotalAmount": "53.33",
+                "TotalUnit": "GB",
+            },
+        ]
+    }
+    result = parse_response(
+        payload,
+        account=make_account(secondary_labels={}),
+        fetched_at=datetime.now(UTC),
+    )
+    assert result.lines[0].consumed_gb == pytest.approx(3.0)
+    assert result.lines[0].quota_gb == pytest.approx(53.33)
+
+
 def test_parse_mobile_internet_suffixed_name():
     """Standalone data lines can be named 'Mobile Internet 7GB' etc. — match
     by prefix, not exact string. Not a U-share plan, so not an aggregate."""
@@ -115,6 +166,57 @@ def test_mb_units_converted():
     )
     assert result.lines[0].consumed_gb == pytest.approx(0.5, abs=0.001)
     assert result.lines[0].quota_gb == pytest.approx(1.0)
+
+
+def test_plan_size_read_from_fields_not_name_any_unit():
+    """Plan size is never parsed from the DisplayName — quota/usage come from
+    TotalAmount/UsedAmount + their units. An upgrade/downgrade to any size or
+    unit (incl. TB) is reported straight from the live values."""
+    payload = {
+        "FreeUnitsValue": [
+            {
+                "DisplayName": "Alfanet 2TB",
+                "SubDisplayName": "Data",
+                "UsageType": "data",
+                "UsedAmount": "0.5",
+                "UsedUnit": "TB",
+                "TotalAmount": "2",
+                "TotalUnit": "TB",
+                "ExtraUsage": "",
+                "ExtraUnit": "",
+            }
+        ]
+    }
+    result = parse_response(
+        payload,
+        account=make_account(secondary_labels={}),
+        fetched_at=datetime.now(UTC),
+    )
+    assert result.lines[0].consumed_gb == pytest.approx(512.0)  # 0.5 TB
+    assert result.lines[0].quota_gb == pytest.approx(2048.0)  # 2 TB
+
+
+def test_lowercase_unit_normalized():
+    payload = {
+        "FreeUnitsValue": [
+            {
+                "DisplayName": "Alfanet 500GB",
+                "SubDisplayName": "Data",
+                "UsageType": "data",
+                "UsedAmount": "12.5",
+                "UsedUnit": "gb",
+                "TotalAmount": "500",
+                "TotalUnit": "Gb",
+            }
+        ]
+    }
+    result = parse_response(
+        payload,
+        account=make_account(secondary_labels={}),
+        fetched_at=datetime.now(UTC),
+    )
+    assert result.lines[0].consumed_gb == pytest.approx(12.5)
+    assert result.lines[0].quota_gb == pytest.approx(500.0)
 
 
 def test_missing_free_units_raises_unknown():

@@ -62,6 +62,13 @@ class AuthFetchError(Exception):
     """Invalid credentials, account locked, captcha. Do NOT retry this cycle."""
 
 
+class ProviderUnsupportedError(AuthFetchError):
+    """The carrier can no longer be automated at all — e.g. it removed
+    password login in favour of OTP. Treated like an auth error (no retry),
+    but the scheduler also RESETS the account's published values so stale
+    numbers don't linger in Home Assistant forever."""
+
+
 class UnknownFetchError(Exception):
     """Unexpected page structure or JSON shape. One retry only."""
 

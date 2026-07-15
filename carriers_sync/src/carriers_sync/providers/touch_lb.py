@@ -30,6 +30,7 @@ from carriers_sync.providers.base import (
     AuthFetchError,
     LineUsage,
     ProviderResult,
+    ProviderUnsupportedError,
     TransientFetchError,
     UnknownFetchError,
 )
@@ -133,7 +134,7 @@ class TouchLbProvider:
             # the redirect off /autoforms and fail with an actionable message
             # rather than the generic "no logout link" from the dead POST.
             if "/autoforms" not in page.url:
-                raise AuthFetchError(
+                raise ProviderUnsupportedError(
                     "Touch retired its password portal; login is now OTP-only "
                     "(mobile/email verification code), so automated sync is no "
                     "longer possible. Remove this Touch account until Touch "

@@ -30,6 +30,7 @@ from carriers_sync.providers.base import (
     AuthFetchError,
     Provider,
     ProviderResult,
+    ProviderUnsupportedError,
     TransientFetchError,
     UnknownFetchError,
 )
@@ -59,6 +60,9 @@ def classify_outcome(exc: BaseException | None) -> str:
         return ""
     if isinstance(exc, TransientFetchError):
         return "transient"
+    # ProviderUnsupportedError subclasses AuthFetchError — check it first.
+    if isinstance(exc, ProviderUnsupportedError):
+        return "unsupported"
     if isinstance(exc, AuthFetchError):
         return "auth"
     if isinstance(exc, UnknownFetchError):
@@ -210,12 +214,26 @@ class Scheduler:
             return ""
 
         err_token = classify_outcome(exc)
-        await self._publish_error_state(account, err_token, now_iso)
+        await self._publish_error_state(account, err_token, now_iso, exc=exc)
         return err_token
 
     async def _publish_error_state(
-        self, account: AccountConfig, err_token: str, now_iso: str
+        self,
+        account: AccountConfig,
+        err_token: str,
+        now_iso: str,
+        *,
+        exc: BaseException | None = None,
     ) -> None:
+        pid = account.provider.replace("-", "_")
+
+        # A permanently-unsupported provider (e.g. Touch after its OTP-only
+        # migration) resets to zeros instead of freezing the last-known values,
+        # and is dropped from persisted state so a restart won't republish it.
+        if isinstance(exc, ProviderUnsupportedError):
+            await self._publish_reset_state(account, err_token, now_iso, pid=pid)
+            return
+
         prev = self._state_store.load().last_results.get(account.username)
         merged: dict[str, Any] = {}
         if prev is not None:
@@ -227,7 +245,6 @@ class Scheduler:
                 "last_attempted": now_iso,
             }
         )
-        pid = account.provider.replace("-", "_")
         await self._publisher.publish_many(
             [
                 MqttMessage(
@@ -237,6 +254,45 @@ class Scheduler:
                 )
             ]
         )
+
+    async def _publish_reset_state(
+        self, account: AccountConfig, err_token: str, now_iso: str, *, pid: str
+    ) -> None:
+        state = self._state_store.load()
+        prev = state.last_results.get(account.username)
+
+        messages: list[MqttMessage] = [
+            MqttMessage(
+                topic=f"carriers_sync/{pid}/{account.username}/state",
+                payload={
+                    "consumed_gb": 0.0,
+                    "total_consumed_gb": 0.0,
+                    "quota_gb": None,
+                    "remaining_gb": 0.0,
+                    "usage_percent": 0.0,
+                    "extra_consumed_gb": 0.0,
+                    "danger": "OFF",
+                    "sync_ok": "OFF",
+                    "last_error": err_token,
+                    "last_attempted": now_iso,
+                },
+                retain=True,
+            )
+        ]
+        if prev is not None:
+            for line in prev.lines:
+                if line.is_secondary:
+                    messages.append(
+                        MqttMessage(
+                            topic=f"carriers_sync/{pid}/{account.username}/{line.line_id}/state",
+                            payload={"consumed_gb": 0.0},
+                            retain=True,
+                        )
+                    )
+            del state.last_results[account.username]
+            self._state_store.save(state)
+
+        await self._publisher.publish_many(messages)
 
     async def _publish_discovery(self) -> None:
         msgs = build_app_device_messages()
