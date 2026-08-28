@@ -45,6 +45,7 @@ from carriers_sync.providers.base import (
     ProviderResult,
     TransientFetchError,
     UnknownFetchError,
+    sanitize_account_id,
 )
 
 logger = logging.getLogger("carriers_sync.providers.ogero_lb")
@@ -109,10 +110,10 @@ def _to_gb(val: float, unit: str) -> float:
     raise UnknownFetchError(f"unknown data unit: {unit}")
 
 
-def _sanitize_username(username: str) -> str:
+def _sanitize_username(username: str) -> str:  # noqa: D401  (thin alias)
     """Convert email/special-char usernames into a slug safe for use as a
     line_id (which feeds into entity_id slugs and MQTT topic paths)."""
-    return re.sub(r"[^a-zA-Z0-9]+", "_", username).strip("_").lower() or "ogero"
+    return sanitize_account_id(username)
 
 
 class OgeroLbProvider:

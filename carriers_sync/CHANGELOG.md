@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.3] — 2026-08-28
+
+### Fixed
+
+- **The Refresh button never worked for email-based logins (Ogero).** Refresh
+  commands are addressed by `account_id`, which Ogero sanitises from the email
+  username (`khoury.aziz@gmail.com` -> `khoury_aziz_gmail_com`), but the
+  scheduler matched inbound commands on `username` only — so every press logged
+  `refresh requested for unknown account …` and did nothing. The sanitiser moved
+  to `providers.base.sanitize_account_id` and the scheduler now matches either
+  form. Numeric logins (Alfa) are unaffected.
+
 ## [0.6.2] — 2026-08-28
 
 ### Fixed

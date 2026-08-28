@@ -247,3 +247,22 @@ async def test_unsupported_provider_resets_published_values(monkeypatch):
     # Dropped from persisted state so a restart won't republish the stale data.
     assert "acct" not in state.last_results
     state_store.save.assert_called()
+
+
+def test_refresh_matches_an_email_login_by_its_sanitised_account_id():
+    """Refresh commands are addressed by account_id. Ogero sanitises an email
+    username into the id, so matching only on username never fired and the
+    refresh button silently did nothing for those accounts."""
+    from carriers_sync.providers.base import sanitize_account_id
+
+    assert sanitize_account_id("khoury.aziz@gmail.com") == "khoury_aziz_gmail_com"
+    # Numeric logins are unchanged, so Alfa keeps matching on username directly.
+    assert sanitize_account_id("70238729") == "70238729"
+
+
+def test_ogero_account_id_still_uses_the_shared_sanitiser():
+    from carriers_sync.providers.base import sanitize_account_id
+    from carriers_sync.providers.ogero_lb import _sanitize_username
+
+    for u in ["khoury.aziz@gmail.com", "A.B-C@x.io", "70238729"]:
+        assert _sanitize_username(u) == sanitize_account_id(u)

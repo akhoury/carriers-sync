@@ -7,9 +7,22 @@ and LineUsage.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar, Protocol
+
+
+def sanitize_account_id(username: str) -> str:
+    """Reduce a username to something safe for MQTT topics and entity slugs.
+
+    A provider whose username is an email address cannot use it verbatim as an
+    account_id, so it sanitises it. The scheduler needs the same transform to map
+    an inbound refresh command (addressed by account_id) back to the configured
+    account (keyed by username) — otherwise the refresh button silently does
+    nothing for those accounts.
+    """
+    return re.sub(r"[^a-zA-Z0-9]+", "_", username).strip("_").lower() or "account"
 
 
 @dataclass(frozen=True, slots=True)

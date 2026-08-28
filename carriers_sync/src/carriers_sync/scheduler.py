@@ -33,6 +33,7 @@ from carriers_sync.providers.base import (
     ProviderUnsupportedError,
     TransientFetchError,
     UnknownFetchError,
+    sanitize_account_id,
 )
 from carriers_sync.providers.ogero_lb import OgeroLbProvider
 from carriers_sync.providers.touch_lb import TouchLbProvider
@@ -369,7 +370,13 @@ class Scheduler:
                 if acct_id in in_flight:
                     continue
                 account = next(
-                    (a for a in self._config.accounts if a.username == acct_id),
+                    (
+                        a
+                        for a in self._config.accounts
+                        # Refresh commands are addressed by account_id, which for
+                        # email-based logins is the sanitised username.
+                        if acct_id in (a.username, sanitize_account_id(a.username))
+                    ),
                     None,
                 )
                 if account is None:
