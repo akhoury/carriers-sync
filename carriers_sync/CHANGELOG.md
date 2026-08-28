@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-08-28
+
+### Fixed
+
+- **`main_own_consumed_gb` was declared but never published.** 0.6.0 emitted the
+  sensor's discovery config without adding the value to the account's state
+  payload, so `sensor.<account>_main_line_consumed` existed and sat permanently
+  `unknown`. Caught by rendering the dashboard template against a live instance.
+
 ## [0.6.0] — 2026-08-28
 
 ### Fixed

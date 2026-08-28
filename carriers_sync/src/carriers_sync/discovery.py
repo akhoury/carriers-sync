@@ -482,6 +482,7 @@ def _main_state_message(
             "secondaries_missing": len(missing),
             "secondaries_missing_detail": detail,
             "secondaries_stale": "ON" if missing else "OFF",
+            "main_own_consumed_gb": result.main_own_consumed_gb,
         },
     )
 

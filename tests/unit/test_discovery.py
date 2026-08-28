@@ -368,6 +368,20 @@ def test_not_in_response_reason_is_passed_through():
     assert payload["reason"] == "not_in_response"
 
 
+def test_main_own_consumed_value_is_published_not_just_declared():
+    """Regression: the sensor's discovery config was emitted without the value
+    ever being added to the state payload, so it sat permanently unknown."""
+    result = make_result_ushare()
+    with_own = ProviderResult(
+        account_id=result.account_id,
+        lines=result.lines,
+        fetched_at=result.fetched_at,
+        main_own_consumed_gb=1.08,
+    )
+    state = _payload_for(_build(with_own), "carriers_sync/alfa_lb/03333333/state")
+    assert state["main_own_consumed_gb"] == pytest.approx(1.08)
+
+
 def test_main_own_consumed_sensor_only_when_derivable():
     """Emitted for pooled-aggregate providers, omitted otherwise, so accounts
     without a pool don't gain a permanently-unknown entity."""
