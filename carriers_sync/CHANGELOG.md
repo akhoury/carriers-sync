@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-08-28
+
+### Fixed
+
+- **Alfa U-share secondaries are read again.** 0.4.5 concluded that Alfa had
+  stopped publishing per-twin usage, because `Secondaries` came back null and
+  the payload captured at the time had no per-twin data. Alfa in fact moved the
+  breakdown into separate `FreeUnitsValue` entries named `Twin-Data Secondary`,
+  one per active twin, carrying the twin's MSISDN in **`PrimaryNumber`**
+  (`SubDisplayName` is null). `_select_data_entry` returned exactly one entry
+  and discarded the rest, so every Alfa account reported a single line and the
+  per-twin HA devices sat frozen at their last pre-July values.
+
+  The parser now emits one secondary line per `Twin-Data Secondary` entry.
+  `quota_gb` is deliberately left `None`: `TotalAmount` on a twin entry repeats
+  the *shared pool* quota, so treating it as a per-line allowance would render
+  two twins each as "15.64 / 85 GB".
+
+- **`is_aggregate` now survives a restart.** `state_store` never persisted it,
+  and the scheduler rebuilds MQTT messages from restored results — so after a
+  restart `_main_state_message` took the "not an aggregate" branch and re-added
+  the twins to an already-pooled total. Harmless while Alfa returned no
+  secondaries (the sum was over an empty list); a live double-count as soon as
+  they came back. `missing_secondaries` and `main_own_consumed_gb` round-trip for
+  the same reason: without them a restart would republish deactivated lines as
+  current. Older `state.json` files still load (fields are read defensively).
+
+- **Main-line usage is derived instead of read.** `U-share Main` now mirrors the
+  pooled total (both 25.65 on a live account) rather than the main number's own
+  usage, as it did when the 0.4.5 fixture was captured (14.20 vs 2.85). The main
+  number's own share is now computed as `aggregate - sum(twins)` and published as
+  `main_own_consumed_gb`, emitted only when a pooled aggregate exists.
+
+### Added
+
+- **Deactivated secondaries are surfaced instead of silently vanishing.** Alfa
+  auto-deactivates U-share twins when the shared bundle is exhausted: the twin
+  entries disappear and the account reverts to a plain data bundle until the
+  subscriber calls Alfa. Previously this was indistinguishable from a healthy
+  single-line account.
+
+  Configured secondaries missing from a response are now reported in
+  `ProviderResult.missing_secondaries` with a machine-readable reason —
+  `bundle_inactive` (the pooled bundle is gone, every twin is off: the case that
+  needs a phone call) or `not_in_response` (bundle live, one number absent).
+
+- **Per-secondary staleness, without losing the last reading.** Each secondary
+  gains `sensor…_last_seen` and `binary_sensor…_stale` (device_class `problem`).
+  A missing secondary's **state topic is not republished**, so the retained
+  `consumed_gb` and `last_seen` keep the last real reading; a separate `status`
+  topic is republished every cycle and carries `stale` + `reason`. Cards can
+  therefore show "8.93 GB — as of 4 July" rather than presenting a frozen number
+  as current.
+
+- **Account-level rollup** for at-a-glance warnings on a single card:
+  `secondaries_expected`, `secondaries_reported`, `secondaries_missing`,
+  `secondaries_missing_detail` (e.g. `"Josephine (70319053), S22 (70316534)"`)
+  and `binary_sensor…_secondaries_stale`.
+
+- Discovery is still published for a secondary that has never been read, so a
+  configured-but-deactivated line appears in Home Assistant flagged stale rather
+  than being invisible.
+
 ## [0.5.0] — 2026-07-10
 
 ### Changed (breaking)

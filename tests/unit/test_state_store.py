@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from carriers_sync.providers.base import LineUsage, ProviderResult
+from carriers_sync.providers.base import LineUsage, MissingLine, ProviderResult
 from carriers_sync.state_store import State, StateStore
 
 
@@ -82,3 +82,83 @@ def test_save_then_load_preserves_unicode_labels(tmp_path):
     store.save(State(last_results={"03333333": res}, last_published_entities=set()))
     loaded = store.load()
     assert loaded.last_results["03333333"].lines[0].label == "جون"
+
+
+def make_aggregate_result():
+    """An Alfa U-share result: pooled main line, two twins, one deactivated."""
+    return ProviderResult(
+        account_id="70200001",
+        lines=[
+            LineUsage(
+                line_id="70200001",
+                label="Laure",
+                consumed_gb=25.65,
+                quota_gb=85.0,
+                extra_consumed_gb=0.0,
+                is_secondary=False,
+                parent_line_id=None,
+                is_aggregate=True,
+            ),
+            LineUsage(
+                line_id="70300001",
+                label="Josephine",
+                consumed_gb=8.93,
+                quota_gb=None,
+                extra_consumed_gb=0.0,
+                is_secondary=True,
+                parent_line_id="70200001",
+            ),
+        ],
+        fetched_at=datetime(2026, 8, 28, 16, 1, tzinfo=UTC),
+        missing_secondaries=[
+            MissingLine(line_id="70300002", label="S22", reason="bundle_inactive")
+        ],
+        main_own_consumed_gb=1.08,
+    )
+
+
+def test_is_aggregate_survives_round_trip(tmp_path):
+    """The scheduler rebuilds MQTT messages from restored results. If
+    is_aggregate is lost, _main_state_message re-adds the twins to an already
+    pooled total and the account double-counts after every restart."""
+    store = StateStore(tmp_path / "state.json")
+    store.save(State(last_results={"70200001": make_aggregate_result()}))
+    main = store.load().last_results["70200001"].lines[0]
+    assert main.is_aggregate is True
+
+
+def test_missing_secondaries_survive_round_trip(tmp_path):
+    """Otherwise a restart republishes deactivated lines as stale=OFF, i.e. as
+    current — the exact failure this data exists to prevent."""
+    store = StateStore(tmp_path / "state.json")
+    store.save(State(last_results={"70200001": make_aggregate_result()}))
+    restored = store.load().last_results["70200001"]
+    assert [(m.line_id, m.label, m.reason) for m in restored.missing_secondaries] == [
+        ("70300002", "S22", "bundle_inactive")
+    ]
+    assert restored.main_own_consumed_gb == 1.08
+
+
+def test_state_written_by_an_older_build_still_loads(tmp_path):
+    """0.5.0 state.json has no is_aggregate/missing_secondaries keys."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        """{
+          "last_results": {
+            "03333333": {
+              "account_id": "03333333",
+              "fetched_at": "2026-04-28T12:00:00+00:00",
+              "lines": [{
+                "line_id": "03333333", "label": "John", "consumed_gb": 1.5,
+                "quota_gb": 20.0, "extra_consumed_gb": 0.0,
+                "is_secondary": false, "parent_line_id": null
+              }]
+            }
+          },
+          "last_published_entities": []
+        }"""
+    )
+    restored = StateStore(path).load().last_results["03333333"]
+    assert restored.lines[0].is_aggregate is False
+    assert restored.missing_secondaries == []
+    assert restored.main_own_consumed_gb is None

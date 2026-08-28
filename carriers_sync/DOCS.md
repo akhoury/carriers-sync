@@ -48,6 +48,26 @@ For each account, this App creates an HA *device* identified by the main phone
 number (Alfa) or by the username (Touch synthetic account), plus child devices
 (linked via `via_device`) for each secondary line.
 
+### Deactivated secondary lines (Alfa U-share)
+
+Alfa deactivates U-share twin lines when the shared bundle is exhausted. The
+twins vanish from Alfa's response and the account reverts to a plain data
+bundle until you phone Alfa to re-enable them.
+
+The app does not hide this. When a configured secondary is absent:
+
+- its `consumed_gb` and `last_seen` keep the **last real reading** (their topic
+  is not republished, so nothing overwrites it),
+- its `stale` binary sensor goes `on`, with a `reason` attribute of
+  `bundle_inactive` (the whole pooled bundle is gone — this is the one that needs
+  a call) or `not_in_response` (bundle live, single number absent),
+- the parent account's `secondaries_missing` counts them and
+  `secondaries_missing_detail` names them, so one card can warn about the whole
+  account.
+
+Build cards against `stale` rather than assuming `consumed_gb` is current — a
+frozen number looks perfectly plausible.
+
 All entity IDs are namespaced as `carriers_sync_<provider>_<line_id>_<metric>`
 where `<provider>` is the provider id with dashes replaced by underscores
 (e.g. `alfa_lb`, `touch_lb`). Filter by `carriers_sync` in Developer Tools →
@@ -65,6 +85,13 @@ Per-account device entities:
 
 Per secondary/peer line:
 - `sensor.carriers_sync_<provider>_<secondary_line_id>_consumed_gb` (always)
+- `sensor.carriers_sync_<provider>_<secondary_line_id>_last_seen` (always) — when the
+  carrier last actually reported this line. Only republished on a successful read, so
+  it holds the last good timestamp when the line goes missing.
+- `binary_sensor.carriers_sync_<provider>_<secondary_line_id>_stale` (always) — `on`
+  when the line is configured but was not in the carrier's latest response. Reads a
+  separate `status` topic, so it stays accurate precisely when `consumed_gb` stops
+  updating. Its `reason` attribute is `bundle_inactive` or `not_in_response`.
 - For Touch numbers (which have their own quota): also `_quota_gb`,
   `_remaining_gb`, `_usage_percent`, `binary_sensor.…_danger`. Alfa U-share
   twins share the main's quota, so they only get `_consumed_gb`.

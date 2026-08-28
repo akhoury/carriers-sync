@@ -31,7 +31,8 @@ For each Alfa or Touch account, an HA device with:
 - `sensor.alfa_<label>_last_synced` / `_last_attempted` / `_last_error`
 - `button.alfa_<label>_refresh`
 
-For U-share accounts, each secondary line becomes its own HA device
+For U-share accounts, each *active* secondary line becomes its own HA device
+(deactivated ones keep their last reading and are flagged stale)
 (`via_device` linked to the main account) with its own `consumed_gb`
 sensor. Plus a singleton "Carriers Sync" device with a global
 `refresh_all` button and an `app_status` sensor.

@@ -11,6 +11,7 @@ This guards against cross-provider collisions if line_ids ever overlap.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from carriers_sync.providers.base import LineUsage, ProviderResult
@@ -88,20 +89,72 @@ def build_account_messages(
     main = next(line for line in result.lines if not line.is_secondary)
     secondaries = [line for line in result.lines if line.is_secondary]
 
-    main_device = _device_dict(main, provider_display, pid, parent=None)
+    main_device = _device_dict(
+        main.line_id, main.label, main.is_secondary, provider_display, pid, parent=None
+    )
     messages.extend(
-        _main_discovery_messages(main, main_device, account_id=result.account_id, pid=pid)
+        _main_discovery_messages(
+            main,
+            main_device,
+            account_id=result.account_id,
+            pid=pid,
+            has_main_own=result.main_own_consumed_gb is not None,
+        )
     )
     messages.append(_main_state_message(result, main, secondaries, danger_percent, pid=pid))
 
     for sec in secondaries:
-        sec_device = _device_dict(sec, provider_display, pid, parent=main.line_id)
+        sec_device = _device_dict(
+            sec.line_id, sec.label, sec.is_secondary, provider_display, pid, parent=main.line_id
+        )
         messages.extend(
-            _secondary_discovery_messages(sec, sec_device, account_id=result.account_id, pid=pid)
+            _secondary_discovery_messages(
+                sec.line_id,
+                sec_device,
+                account_id=result.account_id,
+                pid=pid,
+                has_quota=sec.quota_gb is not None,
+            )
         )
         messages.append(
             _secondary_state_message(
-                sec, account_id=result.account_id, danger_percent=danger_percent, pid=pid
+                sec,
+                account_id=result.account_id,
+                danger_percent=danger_percent,
+                pid=pid,
+                fetched_at=result.fetched_at,
+            )
+        )
+        messages.append(
+            _secondary_status_message(
+                sec.line_id, account_id=result.account_id, pid=pid, stale=False, reason=""
+            )
+        )
+
+    # Configured secondaries the carrier did not report. We deliberately do NOT
+    # publish to their state topic: the retained last-known consumed_gb and
+    # last_seen stay put, so Home Assistant keeps showing the last real reading
+    # instead of blanking it. The status topic is what flips them to stale.
+    for miss in result.missing_secondaries:
+        miss_device = _device_dict(
+            miss.line_id, miss.label, True, provider_display, pid, parent=main.line_id
+        )
+        messages.extend(
+            _secondary_discovery_messages(
+                miss.line_id,
+                miss_device,
+                account_id=result.account_id,
+                pid=pid,
+                has_quota=False,
+            )
+        )
+        messages.append(
+            _secondary_status_message(
+                miss.line_id,
+                account_id=result.account_id,
+                pid=pid,
+                stale=True,
+                reason=miss.reason,
             )
         )
 
@@ -109,17 +162,23 @@ def build_account_messages(
 
 
 def _device_dict(
-    line: LineUsage, manufacturer: str, pid: str, *, parent: str | None
+    line_id: str,
+    label: str,
+    is_secondary: bool,
+    manufacturer: str,
+    pid: str,
+    *,
+    parent: str | None,
 ) -> dict[str, Any]:
     # Short prefix derived from the manufacturer string ("Alfa (Lebanon)" -> "Alfa",
     # "Touch (Lebanon)" -> "Touch"). Avoids hardcoding any one provider in
     # the device name.
     short = manufacturer.split(" (")[0] if " (" in manufacturer else manufacturer
     d: dict[str, Any] = {
-        "identifiers": [f"carriers_sync_{pid}_{line.line_id}"],
-        "name": f"{short}: {line.label}",
+        "identifiers": [f"carriers_sync_{pid}_{line_id}"],
+        "name": f"{short}: {label}",
         "manufacturer": manufacturer,
-        "model": "Secondary line" if line.is_secondary else "Account",
+        "model": "Secondary line" if is_secondary else "Account",
     }
     if parent:
         d["via_device"] = f"carriers_sync_{pid}_{parent}"
@@ -127,7 +186,12 @@ def _device_dict(
 
 
 def _main_discovery_messages(
-    line: LineUsage, device: dict[str, Any], *, account_id: str, pid: str
+    line: LineUsage,
+    device: dict[str, Any],
+    *,
+    account_id: str,
+    pid: str,
+    has_main_own: bool = False,
 ) -> list[MqttMessage]:
     state_topic = f"carriers_sync/{pid}/{account_id}/state"
     cmd_topic = f"carriers_sync/{pid}/{account_id}/refresh/cmd"
@@ -181,7 +245,20 @@ def _main_discovery_messages(
         )
 
     refresh_slug = f"carriers_sync_{pid}_{line.line_id}_refresh"
-    return [
+    extra: list[MqttMessage] = []
+    if has_main_own:
+        # Only emitted when the carrier reports a pooled aggregate, so this is
+        # the main number's own share of the pool rather than the pool total.
+        extra.append(
+            sensor(
+                "main_own_consumed_gb",
+                unit="GB",
+                device_class="data_size",
+                state_class="total_increasing",
+                name="Main line consumed",
+            )
+        )
+    return extra + [
         sensor(
             "consumed_gb",
             unit="GB",
@@ -220,6 +297,17 @@ def _main_discovery_messages(
         ),
         binary("danger", device_class="problem", name="Danger"),
         binary("sync_ok", device_class="connectivity", name="Sync OK"),
+        binary(
+            "secondaries_stale",
+            device_class="problem",
+            name="Secondary lines stale",
+        ),
+        sensor(
+            "secondaries_missing",
+            state_class="measurement",
+            name="Secondary lines missing",
+        ),
+        sensor("secondaries_missing_detail", name="Secondary lines missing detail"),
         sensor("last_synced", device_class="timestamp", name="Last synced"),
         sensor("last_attempted", device_class="timestamp", name="Last attempted"),
         sensor("last_error", name="Last error"),
@@ -238,23 +326,40 @@ def _main_discovery_messages(
 
 
 def _secondary_discovery_messages(
-    sec: LineUsage, device: dict[str, Any], *, account_id: str, pid: str
+    line_id: str,
+    device: dict[str, Any],
+    *,
+    account_id: str,
+    pid: str,
+    has_quota: bool,
 ) -> list[MqttMessage]:
     """Discovery messages for a secondary/peer line.
 
-    Always includes consumed_gb. When the secondary has its own quota
-    (quota_gb is not None — Touch lines, never Alfa U-share twins), also
-    publishes quota/remaining/usage_percent/danger sensors.
+    Always includes consumed_gb, a last_seen timestamp and a stale flag. When
+    the secondary has its own quota (Touch lines, never Alfa U-share twins),
+    also publishes quota/remaining/usage_percent/danger sensors.
+
+    consumed_gb and last_seen read the line's state topic, which is only
+    republished when the carrier actually reports the line — so they retain the
+    last real reading. stale reads a separate status topic that is republished
+    every cycle, which is what lets a card show "8.93 GB, as of Tuesday" rather
+    than presenting a frozen number as current.
     """
-    state_topic = f"carriers_sync/{pid}/{account_id}/{sec.line_id}/state"
+    state_topic = f"carriers_sync/{pid}/{account_id}/{line_id}/state"
+    status_topic = f"carriers_sync/{pid}/{account_id}/{line_id}/status"
     base_cfg: dict[str, Any] = {
         "device": device,
         "availability_topic": AVAILABILITY_TOPIC,
         "state_topic": state_topic,
     }
+    status_cfg: dict[str, Any] = {
+        "device": device,
+        "availability_topic": AVAILABILITY_TOPIC,
+        "state_topic": status_topic,
+    }
 
     def _slug(metric: str) -> str:
-        return f"carriers_sync_{pid}_{sec.line_id}_{metric}"
+        return f"carriers_sync_{pid}_{line_id}_{metric}"
 
     consumed_slug = _slug("consumed_gb")
     msgs: list[MqttMessage] = [
@@ -271,9 +376,34 @@ def _secondary_discovery_messages(
                 "state_class": "total_increasing",
             },
         ),
+        MqttMessage(
+            topic=f"homeassistant/sensor/{_slug('last_seen')}/config",
+            payload={
+                **base_cfg,
+                "name": "Last seen",
+                "unique_id": _slug("last_seen"),
+                "object_id": _slug("last_seen"),
+                "value_template": "{{ value_json.last_seen }}",
+                "device_class": "timestamp",
+            },
+        ),
+        MqttMessage(
+            topic=f"homeassistant/binary_sensor/{_slug('stale')}/config",
+            payload={
+                **status_cfg,
+                "name": "Stale",
+                "unique_id": _slug("stale"),
+                "object_id": _slug("stale"),
+                "value_template": "{{ value_json.stale }}",
+                "device_class": "problem",
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "json_attributes_topic": status_topic,
+            },
+        ),
     ]
 
-    if sec.quota_gb is not None:
+    if has_quota:
         for metric, name, unit, device_class, state_class in [
             ("quota_gb", "Quota", "GB", "data_size", "measurement"),
             ("remaining_gb", "Remaining", "GB", "data_size", "measurement"),
@@ -331,6 +461,8 @@ def _main_state_message(
     pct = round((total / quota) * 100, 1) if quota else 0.0
     danger = bool(quota and (total / quota) * 100 >= danger_percent) or main.extra_consumed_gb > 0
     iso = result.fetched_at.isoformat()
+    missing = result.missing_secondaries
+    detail = ", ".join(f"{m.label} ({m.line_id})" for m in missing)
     return MqttMessage(
         topic=f"carriers_sync/{pid}/{result.account_id}/state",
         payload={
@@ -345,7 +477,31 @@ def _main_state_message(
             "last_synced": iso,
             "last_attempted": iso,
             "last_error": "",
+            "secondaries_expected": len(secondaries) + len(missing),
+            "secondaries_reported": len(secondaries),
+            "secondaries_missing": len(missing),
+            "secondaries_missing_detail": detail,
+            "secondaries_stale": "ON" if missing else "OFF",
         },
+    )
+
+
+def _secondary_status_message(
+    line_id: str,
+    *,
+    account_id: str,
+    pid: str,
+    stale: bool,
+    reason: str,
+) -> MqttMessage:
+    """Per-secondary staleness, republished every cycle.
+
+    Kept on its own topic so that marking a line stale never overwrites the
+    retained consumed_gb/last_seen on the state topic.
+    """
+    return MqttMessage(
+        topic=f"carriers_sync/{pid}/{account_id}/{line_id}/status",
+        payload={"stale": "ON" if stale else "OFF", "reason": reason},
     )
 
 
@@ -355,8 +511,12 @@ def _secondary_state_message(
     account_id: str,
     danger_percent: int,
     pid: str,
+    fetched_at: datetime,
 ) -> MqttMessage:
-    payload: dict[str, Any] = {"consumed_gb": sec.consumed_gb}
+    payload: dict[str, Any] = {
+        "consumed_gb": sec.consumed_gb,
+        "last_seen": fetched_at.isoformat(),
+    }
     if sec.quota_gb is not None:
         quota = sec.quota_gb
         remaining = max(0.0, quota - sec.consumed_gb) if quota else 0.0

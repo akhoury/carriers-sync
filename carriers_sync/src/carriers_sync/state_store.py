@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from carriers_sync.providers.base import LineUsage, ProviderResult
+from carriers_sync.providers.base import LineUsage, MissingLine, ProviderResult
 
 logger = logging.getLogger("carriers_sync.state")
 
@@ -76,9 +76,20 @@ class StateStore:
 
 
 def _result_to_dict(r: ProviderResult) -> dict[str, Any]:
+    """Serialise a result for disk.
+
+    is_aggregate must round-trip: the scheduler rebuilds MQTT messages from
+    restored results, and losing the flag makes _main_state_message re-add the
+    secondaries to an already-pooled total (double counting).
+
+    missing_secondaries must round-trip for the same reason — dropping it would
+    republish stale lines as "current" on every restart, which is exactly the
+    failure this data exists to prevent.
+    """
     return {
         "account_id": r.account_id,
         "fetched_at": r.fetched_at.isoformat(),
+        "main_own_consumed_gb": r.main_own_consumed_gb,
         "lines": [
             {
                 "line_id": line.line_id,
@@ -88,13 +99,21 @@ def _result_to_dict(r: ProviderResult) -> dict[str, Any]:
                 "extra_consumed_gb": line.extra_consumed_gb,
                 "is_secondary": line.is_secondary,
                 "parent_line_id": line.parent_line_id,
+                "is_aggregate": line.is_aggregate,
             }
             for line in r.lines
+        ],
+        "missing_secondaries": [
+            {"line_id": m.line_id, "label": m.label, "reason": m.reason}
+            for m in r.missing_secondaries
         ],
     }
 
 
 def _result_from_dict(d: dict[str, Any]) -> ProviderResult:
+    """Rehydrate a result. Fields added after 0.5.0 are read defensively so a
+    state.json written by an older build still loads."""
+    raw_own = d.get("main_own_consumed_gb")
     return ProviderResult(
         account_id=d["account_id"],
         fetched_at=datetime.fromisoformat(d["fetched_at"]),
@@ -107,7 +126,17 @@ def _result_from_dict(d: dict[str, Any]) -> ProviderResult:
                 extra_consumed_gb=float(line["extra_consumed_gb"]),
                 is_secondary=bool(line["is_secondary"]),
                 parent_line_id=line["parent_line_id"],
+                is_aggregate=bool(line.get("is_aggregate", False)),
             )
             for line in d["lines"]
         ],
+        missing_secondaries=[
+            MissingLine(
+                line_id=m["line_id"],
+                label=m.get("label") or m["line_id"],
+                reason=m.get("reason", "not_in_response"),
+            )
+            for m in d.get("missing_secondaries", [])
+        ],
+        main_own_consumed_gb=None if raw_own is None else float(raw_own),
     )

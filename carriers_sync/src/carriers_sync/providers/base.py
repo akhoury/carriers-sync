@@ -7,7 +7,7 @@ and LineUsage.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar, Protocol
 
@@ -46,12 +46,41 @@ class LineUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class MissingLine:
+    """A secondary configured in options.json that the carrier did not report.
+
+    Alfa auto-deactivates U-share twins once the shared bundle is exhausted:
+    the twin entries vanish from getconsumptionasync and the account reverts
+    to a plain data bundle until the subscriber calls Alfa to re-enable them.
+    Reporting the gap explicitly lets Home Assistant keep showing the last
+    known value while flagging it as stale, instead of presenting a frozen
+    number as if it were current.
+
+    reason is machine-readable:
+      "bundle_inactive" — the shared/U-share bundle is gone altogether
+      "not_in_response" — the bundle is active but this number was absent
+    """
+
+    line_id: str
+    label: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderResult:
-    """Result of one fetch for one account."""
+    """Result of one fetch for one account.
+
+    missing_secondaries lists configured secondaries the carrier did not
+    report this cycle. main_own_consumed_gb is the main number's own usage
+    when the carrier only exposes a pooled aggregate, or None when it is not
+    derivable.
+    """
 
     account_id: str
     lines: list[LineUsage]
     fetched_at: datetime
+    missing_secondaries: list[MissingLine] = field(default_factory=list)
+    main_own_consumed_gb: float | None = None
 
 
 class TransientFetchError(Exception):

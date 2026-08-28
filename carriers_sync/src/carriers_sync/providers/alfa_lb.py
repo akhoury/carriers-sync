@@ -18,6 +18,7 @@ from carriers_sync.providers.base import (
     AccountConfig,
     AuthFetchError,
     LineUsage,
+    MissingLine,
     NoConsumptionDataError,
     ProviderResult,
     TransientFetchError,
@@ -33,6 +34,9 @@ logger = logging.getLogger("carriers_sync.providers.alfa_lb")
 # "Free <something>" and must never be picked as the primary line.
 _USHARE_TOTAL = "U-share Total Bundle"
 _USHARE_MAIN = "U-share Main"
+# One entry per active U-share twin. The twin's MSISDN is in PrimaryNumber
+# (SubDisplayName is null); TotalAmount repeats the shared pool quota.
+_TWIN_SECONDARY = "Twin-Data Secondary"
 _FREE_ADDON_PREFIX = "free"
 _LOGIN_URL = "https://www.alfa.com.lb/en/account/login"
 _CONSUMPTION_URL_PATTERN = "**/en/account/getconsumption*"
@@ -56,10 +60,22 @@ def parse_response(
 
     Alfa's response lists every free unit (data + voice bundles) under
     ``FreeUnitsValue``. For a U-share plan it exposes a "U-share Total Bundle"
-    aggregate — main line plus every secondary rolled up — and a "U-share Main"
-    line; the per-secondary breakdown is no longer provided (``Secondaries`` is
-    always null). We therefore report a single line: the aggregate when it
-    exists (``is_aggregate=True``), otherwise the standalone data bundle.
+    aggregate (main plus every twin, against the shared quota), one
+    "Twin-Data Secondary" entry per *active* twin, and a "U-share Main" entry.
+
+    Two Alfa quirks drive the shape of this parser:
+
+    * ``Secondaries`` is always null. The per-twin breakdown lives in the
+      separate "Twin-Data Secondary" entries instead, keyed by
+      ``PrimaryNumber``.
+    * "U-share Main" now mirrors the pooled total rather than the main
+      number's own usage, so main-only usage is derived as
+      ``aggregate - sum(twins)`` and returned as ``main_own_consumed_gb``.
+
+    A twin that Alfa has deactivated simply disappears from the response (and
+    the account reverts to a plain data bundle). Configured secondaries that
+    are absent are returned in ``missing_secondaries`` so the consumer can
+    mark them stale rather than silently reporting the last known number.
 
     Raises UnknownFetchError on any shape mismatch, NoConsumptionDataError when
     there is no data bundle at all (voice-only / alarm SIMs).
@@ -94,11 +110,117 @@ def parse_response(
         is_aggregate=is_aggregate,
     )
 
+    secondaries = _parse_twin_secondaries(free_units, account=account)
+
+    # Only meaningful against a pooled aggregate: without one there is no
+    # total to subtract the twins from.
+    main_own = None
+    if is_aggregate:
+        main_own = round(
+            max(0.0, consumed_gb - sum(s.consumed_gb for s in secondaries)), 3
+        )
+
+    missing = _missing_secondaries(
+        account=account,
+        reported={s.line_id for s in secondaries},
+        ushare_active=is_aggregate,
+    )
+    if missing:
+        logger.warning(
+            "%s: %d configured secondary line(s) not reported by Alfa (%s): %s",
+            account.username,
+            len(missing),
+            missing[0].reason,
+            ", ".join(f"{m.line_id} ({m.label})" for m in missing),
+        )
+
     return ProviderResult(
         account_id=account.username,
-        lines=[main_line],
+        lines=[main_line, *secondaries],
         fetched_at=fetched_at,
+        missing_secondaries=missing,
+        main_own_consumed_gb=main_own,
     )
+
+
+def _parse_twin_secondaries(
+    free_units: list[dict[str, Any]],
+    *,
+    account: AccountConfig,
+) -> list[LineUsage]:
+    """Every active "Twin-Data Secondary" entry, as secondary LineUsages.
+
+    quota_gb is left None on purpose: TotalAmount on a twin entry repeats the
+    shared pool quota, so treating it as a per-line allowance would render a
+    meaningless percentage (two twins each showing "15.64 / 85 GB").
+    """
+    out: list[LineUsage] = []
+    seen: set[str] = set()
+    for e in free_units:
+        if e.get("DisplayName") != _TWIN_SECONDARY:
+            continue
+        raw = e.get("PrimaryNumber")
+        num = raw.strip() if isinstance(raw, str) else ""
+        if not num:
+            logger.warning(
+                "%s: %s entry without PrimaryNumber — skipping",
+                account.username,
+                _TWIN_SECONDARY,
+            )
+            continue
+        if num in seen:
+            logger.warning(
+                "%s: duplicate %s entry for %s — keeping the first",
+                account.username,
+                _TWIN_SECONDARY,
+                num,
+            )
+            continue
+        try:
+            consumed = _to_gb(_require_num(e, "UsedAmount"), _unit(e, "UsedUnit"))
+        except UnknownFetchError as exc:
+            # One unreadable twin must not cost us the rest of the account.
+            logger.warning(
+                "%s: unreadable usage for twin %s (%s) — skipping",
+                account.username,
+                num,
+                exc,
+            )
+            continue
+        seen.add(num)
+        out.append(
+            LineUsage(
+                line_id=num,
+                label=account.secondary_labels.get(num) or num,
+                consumed_gb=consumed,
+                quota_gb=None,
+                extra_consumed_gb=_extra_gb(e),
+                is_secondary=True,
+                parent_line_id=account.username,
+            )
+        )
+    return out
+
+
+def _missing_secondaries(
+    *,
+    account: AccountConfig,
+    reported: set[str],
+    ushare_active: bool,
+) -> list[MissingLine]:
+    """Configured secondaries absent from this response.
+
+    ushare_active distinguishes the two failure modes: when the pooled bundle
+    itself is gone every twin is deactivated ("bundle_inactive", the case that
+    needs a call to Alfa); when the bundle is live but one number is missing,
+    only that line is affected ("not_in_response").
+    """
+    reason = "not_in_response" if ushare_active else "bundle_inactive"
+    return [
+        MissingLine(line_id=num, label=label or num, reason=reason)
+        for num, label in sorted(account.secondary_labels.items())
+        if num not in reported
+    ]
 
 
 def _select_data_entry(
@@ -128,6 +250,7 @@ def _select_data_entry(
         name = e.get("DisplayName")
         if (
             isinstance(name, str)
+            and name != _TWIN_SECONDARY
             and e.get("UsageType") == "data"
             and not name.strip().lower().startswith(_FREE_ADDON_PREFIX)
         ):
