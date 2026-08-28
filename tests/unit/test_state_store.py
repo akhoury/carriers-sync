@@ -139,11 +139,50 @@ def test_missing_secondaries_survive_round_trip(tmp_path):
     assert restored.main_own_consumed_gb == 1.08
 
 
-def test_state_written_by_an_older_build_still_loads(tmp_path):
-    """0.5.0 state.json has no is_aggregate/missing_secondaries keys."""
+def test_v1_state_is_discarded_rather_than_republished(tmp_path):
+    """A v1 file has no is_aggregate. Defaulting it to False makes the scheduler
+    republish a pooled total with the secondaries added on top — a confidently
+    wrong number. Dropping the cache costs one poll interval of 'unknown'."""
     path = tmp_path / "state.json"
     path.write_text(
         """{
+          "last_results": {
+            "03333333": {
+              "account_id": "03333333",
+              "fetched_at": "2026-04-28T12:00:00+00:00",
+              "lines": [{
+                "line_id": "03333333", "label": "John", "consumed_gb": 172.0,
+                "quota_gb": 2000.0, "extra_consumed_gb": 0.0,
+                "is_secondary": false, "parent_line_id": null
+              }]
+            }
+          },
+          "last_published_entities": ["sensor.keep_me"]
+        }"""
+    )
+    state = StateStore(path).load()
+    assert state.last_results == {}
+    # Published-entity tracking must survive, or cleanup would orphan entities.
+    assert state.last_published_entities == {"sensor.keep_me"}
+
+
+def test_saved_state_declares_its_version(tmp_path):
+    import json as _json
+
+    path = tmp_path / "state.json"
+    store = StateStore(path)
+    store.save(State(last_results={"70200001": make_aggregate_result()}))
+    assert _json.loads(path.read_text())["version"] == 2
+    # ...and a file we just wrote is accepted on load.
+    assert "70200001" in store.load().last_results
+
+
+def test_state_written_by_an_older_build_still_loads(tmp_path):
+    """A v2 file may still omit the optional per-result fields."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        """{
+          "version": 2,
           "last_results": {
             "03333333": {
               "account_id": "03333333",

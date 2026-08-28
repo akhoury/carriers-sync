@@ -21,6 +21,18 @@ from carriers_sync.providers.base import LineUsage, MissingLine, ProviderResult
 
 logger = logging.getLogger("carriers_sync.state")
 
+# Bumped whenever a field the scheduler *republishes from* is added, so that
+# results written by an older build are discarded rather than republished with
+# the new field silently defaulted.
+#
+# 2: adds LineUsage.is_aggregate and ProviderResult.missing_secondaries. A v1
+#    file has neither, and defaulting is_aggregate to False makes
+#    _main_state_message re-add the secondaries to an already-pooled total —
+#    republishing a confidently wrong number (e.g. 172 + 172 = 344 GB) on the
+#    first start after upgrading. Dropping the cache costs one poll interval of
+#    "unknown", which is honest; the wrong total is not.
+STATE_VERSION = 2
+
 
 @dataclass
 class State:
@@ -42,6 +54,19 @@ class StateStore:
             self._move_aside_corrupt()
             return State()
 
+        version = raw.get("version", 1)
+        if version < STATE_VERSION:
+            logger.warning(
+                "state.json is v%s (expected v%s): discarding cached results rather "
+                "than republishing them with missing fields defaulted. Values will "
+                "repopulate on the next sync.",
+                version,
+                STATE_VERSION,
+            )
+            return State(
+                last_published_entities=set(raw.get("last_published_entities", []))
+            )
+
         results: dict[str, ProviderResult] = {}
         for acct_id, payload in raw.get("last_results", {}).items():
             try:
@@ -56,6 +81,7 @@ class StateStore:
 
     def save(self, state: State) -> None:
         payload = {
+            "version": STATE_VERSION,
             "last_results": {
                 acct: _result_to_dict(res) for acct, res in state.last_results.items()
             },

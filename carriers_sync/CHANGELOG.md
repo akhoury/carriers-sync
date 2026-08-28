@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] — 2026-08-28
+
+### Fixed
+
+- **Upgrading no longer republishes a wrong total once.** `state.json` now
+  carries a `version`, and results written by a build that predates
+  `is_aggregate` (v1, i.e. ≤ 0.6.0) are discarded on load instead of being
+  restored with the flag defaulted to `False`. Without this, the first start
+  after upgrading republished every pooled account with its secondaries added on
+  top of an already-pooled total — observed live as a 2000 GB Ogero account
+  reporting `172 + 172 = 344 GB`. Dropping the cache costs one poll interval of
+  "unknown", which is honest; the wrong total is not.
+  `last_published_entities` is preserved across the discard so entity cleanup
+  does not orphan anything.
+
 ## [0.6.1] — 2026-08-28
 
 ### Fixed
