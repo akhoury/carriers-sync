@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.4] — 2026-10-27
+
+### Fixed
+
+- **A Mosquitto restart stopped the App for good.** The MQTT connection was
+  opened once and never re-established, so after the broker restarted (observed
+  live when Mosquitto updated 7.1.1 -> 7.1.2) the next hourly publish failed with
+  `[code:4] The client is not currently connected`. Publishing the `errored`
+  status from the cycle's error handler then failed the same way, which escaped
+  `run_forever`, and the shutdown's `offline` publish raised a third time. The
+  App exited with code 1 and, with the watchdog off, nothing synced for a week.
+  A background task now owns the connection: it reconnects with backoff
+  (1 s up to 60 s), re-announces `online`, and resubscribes the refresh-button
+  topics. Publishes wait for a live connection and retry a message lost to a
+  disconnect (up to 5 tries). The App also waits for a broker that isn't up yet
+  at boot instead of exiting, and a failure to report a failed cycle is logged
+  rather than fatal.
+
 ## [0.6.3] — 2026-08-28
 
 ### Fixed

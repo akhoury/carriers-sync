@@ -156,7 +156,12 @@ class Scheduler:
                     await self._publish_app_status("running")
                 except Exception:
                     logger.exception("unhandled error during cycle")
-                    await self._publish_app_status("errored")
+                    # Must not raise: an exception here ends run_forever and
+                    # with it the App (this is how a Mosquitto restart killed it).
+                    try:
+                        await self._publish_app_status("errored")
+                    except Exception:
+                        logger.exception("could not publish errored status")
                 await self._await_next_cycle()
         finally:
             listener.cancel()

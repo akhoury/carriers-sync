@@ -154,6 +154,9 @@ breaking anything — the durable identity is the `unique_id`, not the entity_id
 
 - **All `sync_ok` are OFF**: Mosquitto is probably down or the MQTT integration
   is misconfigured. Check the App's Log tab.
+- **Sensors stopped updating after a Mosquitto update or restart**: before
+  0.6.4 the App exited when the broker restarted and stayed stopped. Update the
+  App (it now reconnects on its own), or start it again from its Info tab.
 - **`last_error: auth`**: stored password is wrong, or Alfa locked the account.
   The App will not retry until you fix the credentials.
 - **`last_error: transient`**: network issue or Alfa edge rejected us. The App

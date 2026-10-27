@@ -249,6 +249,53 @@ async def test_unsupported_provider_resets_published_values(monkeypatch):
     state_store.save.assert_called()
 
 
+async def test_run_forever_survives_failing_to_report_a_failed_cycle(monkeypatch):
+    """With the broker gone, a cycle fails and so does publishing the "errored"
+    status from the except handler. That second failure used to escape
+    run_forever and exit the App; it must be logged and the loop carry on."""
+    from aiomqtt import MqttCodeError
+    from carriers_sync.scheduler import Scheduler
+
+    async def _pub(messages):
+        if any(m.payload == {"status": "errored"} for m in messages):
+            raise MqttCodeError(4, "Could not publish message")
+
+    publisher = MagicMock()
+    publisher.publish_many = AsyncMock(side_effect=_pub)
+    publisher.subscribe_commands = AsyncMock()
+
+    state_store = MagicMock()
+    state_store.load = MagicMock(
+        return_value=MagicMock(last_results={}, last_published_entities=set())
+    )
+
+    cfg = AppConfig(poll_interval_minutes=60, danger_percent=80, log_level="info", accounts=[])
+    sched = Scheduler(
+        config=cfg,
+        publisher=publisher,
+        state_store=state_store,
+        browser_factory=AsyncMock(),
+    )
+
+    cycles = 0
+
+    async def _failing_cycle():
+        nonlocal cycles
+        cycles += 1
+        if cycles == 2:
+            await sched.stop()
+        raise RuntimeError("cycle failed")
+
+    async def _no_wait():
+        return
+
+    monkeypatch.setattr(sched, "run_one_cycle", _failing_cycle)
+    monkeypatch.setattr(sched, "_await_next_cycle", _no_wait)
+
+    await sched.run_forever()
+    assert cycles == 2
+
+
 def test_refresh_matches_an_email_login_by_its_sanitised_account_id():
     """Refresh commands are addressed by account_id. Ogero sanitises an email
     username into the id, so matching only on username never fired and the
